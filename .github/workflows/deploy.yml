@@ -1,0 +1,91 @@
+name: Deploy Electric Squid
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy-frontend:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          
+      - name: Install Frontend Dependencies
+        working-directory: ./components/client
+        run: |
+          npm install
+          
+      - name: Build Frontend
+        working-directory: ./components/client
+        env:
+          # Adjust environment variables as needed
+          REACT_APP_PROXY_HOST: ${{ secrets.PROXY_HOST }}
+        run: npm run build
+        
+      - name: Upload Frontend Build Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: frontend-build
+          path: ./components/client/build
+
+  deploy-proxy-and-frontend:
+    needs: build-and-deploy-frontend
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          
+      - name: Download Frontend Build
+        uses: actions/download-artifact@v3
+        with:
+          name: frontend-build
+          path: ./components/client/build
+          
+      - name: Install Proxy Dependencies
+        working-directory: ./components/proxy
+        run: npm install
+        
+      - name: Setup PM2
+        run: npm install -g pm2
+        
+      - name: Deploy to Server
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USERNAME }}
+        run: |
+          # Setup SSH
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          
+          # Copy files to server
+          scp -i ~/.ssh/deploy_key -r ./components/proxy/* $DEPLOY_USER@$DEPLOY_HOST:/opt/electric-squid/proxy/
+          scp -i ~/.ssh/deploy_key -r ./components/client/build/* $DEPLOY_USER@$DEPLOY_HOST:/opt/electric-squid/frontend/
+          
+          # Setup and restart services
+          ssh -i ~/.ssh/deploy_key $DEPLOY_USER@$DEPLOY_HOST << 'EOF'
+            cd /opt/electric-squid/proxy
+            npm install
+            
+            # Setup environment
+            echo "HOST_FRONTEND=true" > .env
+            echo "PORT=3005" >> .env
+            
+            # Restart proxy service
+            pm2 delete electric-squid-proxy || true
+            pm2 start npm --name "electric-squid-proxy" -- start
+            pm2 save
+          EOF
