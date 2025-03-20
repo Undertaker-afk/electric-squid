@@ -30,7 +30,7 @@ jobs:
         run: npm run build
         
       - name: Upload Frontend Build Artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: frontend-build
           path: ./components/client/build
